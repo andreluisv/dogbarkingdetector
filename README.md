@@ -1,110 +1,91 @@
 # Dog Barking Detector
 
-**Live Demo:** <a href="https://jatacid.github.io/dogbarkingdetector" target="_blank">https://jatacid.github.io/dogbarkingdetector</a>
-**Domain:** <a href="https://dogbarkingdetector.com/" target="_blank">https://dogbarkingdetector.com/</a>
+This repository contains a browser-based YAMNet detector and a separate,
+lightweight headless listener for Raspberry Pi.
 
-A browser-based, offline dog barking detection tool that uses machine learning to identify and log dog vocalizations in real-time. Built with TensorFlow.js and the YAMNet audio classification model.
+## Raspberry Pi quick start
 
-## License
+Install ALSA and Python, then run from the project directory:
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## Static Files
-
-All application files are located in the `/docs` folder:
-
-## Project Structure
-
-```
-docs/
-├── app.js                    # Main application logic
-├── audio-processor.js        # AudioWorklet for real-time audio capture
-├── index.html               # Main HTML interface
-├── style.css                # CSS styling
-├── favicon.png              # App icon
-├── privacy-policy.html      # Privacy policy page
-├── robots.txt               # SEO configuration
-├── sitemap.xml              # SEO sitemap
-├── libs/                    # Third-party libraries
-│   └── yamnet.js                  # YAMNet wrapper
-└── model/                   # YAMNet machine learning model
-    ├── model.json           # Model configuration
-    ├── group1-shard1of4.bin # Model weights (sharded)
-    ├── group1-shard2of4.bin
-    ├── group1-shard3of4.bin
-    ├── group1-shard4of4.bin
-    ├── assets/
-    │   └── yamnet_class_map.csv # Class labels
-    └── variables/
-        ├── variables.data-00000-of-00001
-        └── variables.index
+```sh
+sudo apt install -y alsa-utils python3-venv
+python3 -m venv .venv
+.venv/bin/pip install -r requirements-yamnet.txt
+cp .env.example .env
+nano .env
+.venv/bin/python main.py
 ```
 
+The default `DETECTION_MODE=yamnet` uses local YAMNet inference. Its model is
+downloaded and cached the first time it runs; subsequent inference runs locally.
+Use a 64-bit Raspberry Pi OS on a newer Pi (Pi 5 recommended). The original Pi 1
+is not suitable for this TensorFlow model. For the lightweight volume trigger,
+set `DETECTION_MODE=rms` and install only `requirements.txt`.
 
-## How It Works
+Set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in `.env`, and set
+`MIC_DEVICE=auto` to use automatic selection. It finds ALSA capture devices and
+tries them in order, retrying discovery if none are found or capture stops. To
+pin a specific microphone, set a device such as `MIC_DEVICE=plughw:2,0`.
+Set `VERBOSE=true` to show informational/debug logs; `VERBOSE=false` hides them
+while warnings and errors remain visible.
 
-### Core Functionality
+## macOS
 
-1. **Audio Capture**: Uses Web Audio API to access microphone input
-2. **File Upload**: Allows uploading audio or video files for offline analysis
-3. **Real-time Processing**: AudioWorklet captures raw audio data in real-time
-4. **Machine Learning**: YAMNet model classifies 1-second audio chunks into 521 sound categories
-5. **Dog Detection**: Specifically monitors for dog vocalization classes such as Dog, Bark, YIp, etc
-6. **Logging**: Records detections with timestamps and audio playback capability
-7. **Visualization**: Real-time detection confidence scores
+macOS uses FFmpeg/AVFoundation instead of ALSA. Install FFmpeg with
+`brew install ffmpeg`, install the YAMNet dependencies with
+`.venv/bin/pip install -r requirements-yamnet.txt`, set `MIC_DEVICE=auto` in
+`.env`, then start with `.venv/bin/python main.py`. Automatic selection tries the
+audio inputs reported by FFmpeg. Linux Raspberry Pi continues to use `arecord`/ALSA.
 
+On macOS, grant microphone access to the terminal app running the script in
+**System Settings → Privacy & Security → Microphone**.
 
-### Technical Details
+## Adjust tolerance
 
-- **Model**: YAMNet (converted to TensorFlow.js format)
-- **Sample Rate**: 16kHz (resampled from browser's native rate)
-- **Chunk Size**: 1 second of audio per inference
-- **Classes**: 521 total, focused on dog sounds (classes 70-75)
-- **Privacy**: All processing happens client-side, no audio data (from microphone or uploaded files) leaves the browser
-- **Dependencies**: TensorFlow.js (loaded from CDN), YAMNet wrapper library
+In YAMNet mode, `YAMNET_CONFIDENCE_THRESHOLD` (default `0.7`) works like the
+browser's tolerance: lower it to detect more sounds, raise it to require stronger
+model confidence. It accepts values from `0.0` to `1.0`. In lightweight `rms`
+mode, use `SENSITIVITY_THRESHOLD` instead; it is a microphone-volume threshold,
+not a model confidence.
 
-## Telegram Alerts Setup
+`CHUNK_SECONDS` sets the audio clip length (default 3 seconds), and
+`COOLDOWN_SECONDS` limits how often alerts are sent (default 60 seconds).
 
-You can optionally send Telegram notifications when the detector identifies a dog bark or other dog vocalization.
+## Start automatically on boot
 
-1. Create a Telegram bot with BotFather and copy the bot token.
-2. Start a chat with the bot in Telegram and send it any message.
-3. Open the app in your browser, then enter the bot token and your chat ID in the Telegram Alerts section.
-4. The values are stored in your browser via local storage and used only by the client-side app.
+Create `/etc/systemd/system/dogbarkingdetector.service`, replacing `<USER>` with
+the Pi account that owns the project:
 
-To find your chat ID, visit the Telegram Bot API endpoint for your bot after sending a message, or use a helper such as @userinfobot.
+```ini
+[Unit]
+Description=Dog Barking Detector
+After=network-online.target sound.target
 
-Example:
-- Bot token: `123456789:ABCDEF...`
-- Chat ID: `123456789`
+[Service]
+User=<USER>
+WorkingDirectory=/home/<USER>/dogbarkingdetector
+EnvironmentFile=/home/<USER>/dogbarkingdetector/.env
+ExecStart=/home/<USER>/dogbarkingdetector/.venv/bin/python /home/<USER>/dogbarkingdetector/main.py
+Restart=on-failure
 
-The app sends a notification only once per minute per detection loop to avoid spamming.
+[Install]
+WantedBy=multi-user.target
+```
 
-## Important Notes
+Enable and check the service:
 
-### Legal Disclaimer
-This tool is intended for personal use only. Users are responsible for complying with all applicable local laws and regulations regarding audio recording and privacy.
+```sh
+sudo systemctl daemon-reload
+sudo systemctl enable --now dogbarkingdetector
+journalctl -u dogbarkingdetector -f
+```
 
-### Performance Requirements
-The application requires modern browsers with Web Audio API support and sufficient hardware capabilities for real-time machine learning inference. Performance may vary on lower-end devices.
+The service account needs access to the microphone (usually via the `audio`
+group). Keep `.env` private because it contains the bot token.
 
-### Detection Algorithm
+## Browser version
 
-1. Capture 1-second audio chunks
-2. Resample to 16kHz if necessary
-3. Run inference through YAMNet model
-4. Check scores for dog-related classes above sensitivity threshold
-5. Prioritize specific vocalizations (bark, yip, howl) over generic
-6. Log detection with timestamp and audio data
-7. Debounce detections to prevent spam (4-second minimum interval)
+The browser app is in [`docs/`](docs/) and uses TensorFlow.js with YAMNet for
+local sound classification. See the [live demo](https://dogbarkingdetector.com/).
 
-
-### Browser Compatibility
-
-Requires modern browser with:
-- Web Audio API support
-- AudioWorklet support
-- getUserMedia for microphone access
-- TensorFlow.js compatible browser
-
-Tested on Chrome, Firefox, Safari, and Edge.
+Licensed under the [MIT License](LICENSE).
